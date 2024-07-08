@@ -5,6 +5,8 @@
 
 *Expect some bugs when it's coming to edge cases and I'm open to adding more features upon request.*
 
+![EditorPreview](https://github.com/SirHolmstrom/Unity-Texture-Atlas-Creator/assets/71155336/c8ba10ec-e2cd-4f77-b724-2acf1e3a7ad8)
+
 
 ## Features
 
