@@ -36,7 +36,7 @@
 
 ### Preview and UI
 - **Real-time Preview**: View the texture atlas as you make adjustments.
-- 
+
 ## Getting Started
 
 ### Installation
