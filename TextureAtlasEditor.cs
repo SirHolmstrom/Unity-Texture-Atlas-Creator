@@ -14,6 +14,7 @@ using UnityEditor;
 using UnityEditorInternal;
 using System.Collections.Generic;
 using System.IO;
+using Unity.VisualScripting;
 
 public partial class TextureAtlasEditor /*Editor*/      : EditorWindow
 {
@@ -25,12 +26,6 @@ public partial class TextureAtlasEditor /*Editor*/      : EditorWindow
 
     private void OnEnable()
     {
-        // Ensuring that the 'textures' list is initialized.
-        if (textures == null)
-        {
-            textures = new List<Texture2D>();
-        }
-
         // Creates the state textures.
         CreateActiveTextures();
 
@@ -40,21 +35,15 @@ public partial class TextureAtlasEditor /*Editor*/      : EditorWindow
         // Get the path of the current script.
         GetEditorPath();
 
-        // Init styles.
-        #region Create Styles
-
-        CreateFoldoutStyle();
-        CreateLeftMenuStyle();
-        CreateRightToolbarStyle();
-
-        #endregion
-
         // Caches Editor Icons. (WIP).
         CacheIcons();
     }
 
     void OnGUI()
     {
+        // Init styles.
+        HandleStyles();
+
         // Top Toolbar.
         DrawToolbar();
 
@@ -68,10 +57,21 @@ public partial class TextureAtlasEditor /*Editor*/      : EditorWindow
         DrawLeftSidebar();
 
         // Center: Image Preview.
-        DrawPreviewArea();
+        Rect centerArea = new Rect(SIDE_BAR_WIDTH + 7 /*extra padding*/, EditorStyles.toolbar.fixedHeight, PREVIEW_AREA_WIDTH + SIDE_BAR_WIDTH, position.height - BOTTOM_BAR_HEIGHT);
+        GUILayout.BeginArea(centerArea);
+
+        DrawPreviewArea(centerArea);
+
+        GUILayout.EndArea();
 
         // Right side: Configuration area.
-        DrawRightSidebar();
+        Rect rightSidebarArea = new Rect(position.width - ONE_THIRD_SIZE, EditorStyles.toolbar.fixedHeight, ONE_THIRD_SIZE, position.height - BOTTOM_BAR_HEIGHT); 
+
+        GUILayout.BeginArea(rightSidebarArea);
+
+        DrawRightSidebar(rightSidebarArea);
+
+        GUILayout.EndArea();
 
         // End of Left, Middle and Right Areas.
         GUILayout.EndHorizontal();
@@ -171,6 +171,7 @@ public partial class TextureAtlasEditor // Fields
     private GUIStyle LEFT_HELPBOX_STYLE;
     private GUIStyle GENERIC_BUTTON_STYLE;
     private GUIStyle RIGHT_TOOLBAR_STYLE;
+    private GUIStyle CENTERED_MINI_LABEL_LARGE;
 
 
     // Button State Textures ---
@@ -195,11 +196,11 @@ public partial class TextureAtlasEditor // Fields
     private GUIContent CROP_ICON = null;
 
     // Editor/Foldout States ---
-    private bool FOLDOUT_SCALE_CROP = true; // add this as a class member variable
-    private bool FOLDOUT_TEXTURE_ALIGNMENT = true; // add this as a class member variable
-    private bool FOLDOUT_OUTLINE = false; // add this as a class member variable
-    private bool FOLDOUT_SIZE = false; // add this as a class member variable
-    private bool SHOW_HELP = true; // add this as a class member variable
+    private bool FOLDOUT_SCALE_CROP = true;
+    private bool FOLDOUT_TEXTURE_ALIGNMENT = true;
+    private bool FOLDOUT_OUTLINE = false;
+    private bool FOLDOUT_SIZE = false;
+    private bool SHOW_HELP = false;
 
     // Dialogue States (WIP) ---
     private bool showResizeDialog = false;
@@ -281,8 +282,10 @@ public partial class TextureAtlasEditor // Atlas
     /// </summary>
     private void UpdateAtlas()
     {
-        if (textures == null || textures.Count == 0)
+        if (textures == null /*|| textures.Count == 0*/)
         {
+            resizedAtlas = null;
+            atlas = null;
             DebugEditor("No textures selected!");
             return;
         }
@@ -993,6 +996,9 @@ public partial class TextureAtlasEditor // Outline
 
 public partial class TextureAtlasEditor // Events       
 {
+    /// <summary>
+    /// Handles Mouse Events such as Panning.
+    /// </summary>
     private void HandleEvents()
     {
         Event e = Event.current;
@@ -1019,6 +1025,70 @@ public partial class TextureAtlasEditor // Events
         // Zoom was here originally but didn't feel as good as I'd hope TBD.
     }
 
+    /// <summary>
+    /// Handles Deselection in the Reordable list.
+    /// </summary>
+    private void HandleDeselection(Rect listArea)
+    {
+        Event e = Event.current;
+
+        // Handle Deselection.
+        if (e.type == EventType.MouseDown)
+        {
+            if (!listArea.Contains(e.mousePosition))
+            {
+                // Clear the selection
+                textureList.index = -1;
+
+                // Use the current event (to prevent other GUI elements from using it)
+                Event.current.Use();
+
+                // Optionally, repaint the editor window to immediately reflect the deselection
+                Repaint();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handles Drag and Drop into the Preview Area.
+    /// </summary>
+    /// <param name="dropArea"></param>
+    private void HandleDragAndDrop(Rect dropArea)
+    {
+        Event evt = Event.current;
+
+        if (textures.Count == 0 || textureList.count == 0)
+        {
+            GUI.Box(dropArea, "Drag and Drop Textures Here", CENTERED_MINI_LABEL_LARGE);
+        }
+
+        switch (evt.type)
+        {
+            case EventType.DragUpdated:
+            case EventType.DragPerform:
+                if (!dropArea.Contains(evt.mousePosition))
+                    return;
+
+                DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+
+                if (evt.type == EventType.DragPerform)
+                {
+                    DragAndDrop.AcceptDrag();
+
+                    foreach (UnityEngine.Object draggedObject in DragAndDrop.objectReferences)
+                    {
+                        if (draggedObject is Texture2D texture)
+                        {
+                            textures.Add(texture);
+                        }
+                    }
+
+                    UpdatePreview();
+                }
+                Event.current.Use();
+                break;
+        }
+    }
 }
 
 public partial class TextureAtlasEditor // Resize       
@@ -1118,6 +1188,12 @@ public partial class TextureAtlasEditor // Helpers
     /// </summary>
     private void CreateActiveTextures()
     {
+        // Ensuring that the 'textures' list is initialized.
+        if (textures == null)
+        {
+            textures = new List<Texture2D>();
+        }
+
         if (!activeBackground)
         {
             activeBackground = MakeColoredTexture(1, 1, new Color(0.24f, 0.49f, 0.91f)); // Blue color
@@ -1210,72 +1286,100 @@ public partial class TextureAtlasEditor // Helpers
     /// </summary>
     private void SetupTextureList()
     {
-        textureList = new ReorderableList(textures, typeof(Texture2D), true, true, true, true);
-
-        textureList.drawHeaderCallback = (Rect rect) =>
+        textureList = new ReorderableList(textures, typeof(Texture2D), true, false, true, true)
         {
-            EditorGUI.LabelField(rect, "Textures");
-        };
+            displayAdd = true,
+            displayRemove = true,
+            multiSelect = true,
 
-        textureList.drawElementCallback = (Rect rect, int index, bool isActive, bool isFocused) =>
-        {
-            if (index >= textures.Count) return;
-
-            textures[index] = (Texture2D)EditorGUI.ObjectField(new Rect(rect.x, rect.y, rect.width - 30, EditorGUIUtility.singleLineHeight),
-                textures[index], typeof(Texture2D), false);
-
-            if (GUI.Button(new Rect(rect.x + rect.width - 30, rect.y, 30, EditorGUIUtility.singleLineHeight), "X"))
+            drawHeaderCallback = (Rect rect) =>
             {
-                textures.RemoveAt(index);
-                UpdatePreview();
-                GUIUtility.ExitGUI();
-            }
-        };
+                EditorGUI.LabelField(rect, "Textures");
+            },
 
-        textureList.onAddCallback = (ReorderableList list) =>
-        {
-            textures.Add(null);
-        };
-
-        textureList.onRemoveCallback = (ReorderableList list) =>
-        {
-            if (EditorUtility.DisplayDialog("Warning", "Are you sure you want to delete the texture?", "Yes", "No"))
+            drawElementCallback = (Rect rect, int index, bool isActive, bool isFocused) =>
             {
-                ReorderableList.defaultBehaviours.DoRemoveButton(list);
-                UpdatePreview();
-                GUIUtility.ExitGUI();
-            }
-        };
+                if (index >= textures.Count) return;
 
-        // Handle drag-and-drop
-        textureList.drawElementBackgroundCallback = (Rect rect, int index, bool isActive, bool isFocused) =>
-        {
-            Event evt = Event.current;
-            if (rect.Contains(evt.mousePosition) && evt.type == EventType.DragUpdated)
-            {
-                DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
-                evt.Use();
-            }
+                // Adjust the rect for the ObjectField to not cover the entire height,
+                // allowing the custom selection background to be visible around the edges
+                float fieldHeight = EditorGUIUtility.singleLineHeight;
+                float verticalPadding = (rect.height - fieldHeight) / 2;
+                Rect fieldRect = new Rect(rect.x + 15, rect.y + verticalPadding, rect.width - 45, fieldHeight); // Adjusted x to account for drag handler
 
-            if (rect.Contains(evt.mousePosition) && evt.type == EventType.DragPerform)
-            {
-                DragAndDrop.AcceptDrag();
-                bool added = false;
-                foreach (UnityEngine.Object draggedObject in DragAndDrop.objectReferences)
+                // Draw the ObjectField
+                textures[index] = (Texture2D)EditorGUI.ObjectField(fieldRect, textures[index], typeof(Texture2D), false);
+
+                // Additional remove button
+                if (GUI.Button(new Rect(rect.x + rect.width - 25, rect.y + verticalPadding, 23, fieldHeight), new GUIContent(EditorGUIUtility.IconContent("winbtn_win_close_h"))))
                 {
-                    if (draggedObject is Texture2D texture)
-                    {
-                        textures.Add(texture);
-                        added = true;
-                    }
-                }
-                if (added)
-                {
+                    textures.RemoveAt(index);
                     UpdatePreview();
                     GUIUtility.ExitGUI();
                 }
-                evt.Use();
-            }
+            },
+
+            onAddCallback = (ReorderableList list) =>
+            {
+                textures.Add(null);
+            },
+
+            onRemoveCallback = (ReorderableList list) =>
+            {
+                if (EditorUtility.DisplayDialog("Warning", "Are you sure you want to delete the texture?", "Yes", "No"))
+                {
+                    ReorderableList.defaultBehaviours.DoRemoveButton(list);
+                    UpdatePreview();
+                    GUIUtility.ExitGUI();
+                }
+            },
+
+            drawElementBackgroundCallback = (Rect rect, int index, bool isActive, bool isFocused) =>
+            {
+                Event e = Event.current;
+
+                if (e.type == EventType.Repaint)
+                {
+                    if (isActive || isFocused)
+                    {
+                        EditorGUI.DrawRect(rect, new Color(0.24f, 0.49f, 0.91f, 1f)); // A bright blue, for example
+                    }
+                }
+
+                // Handle drag-and-drop
+                if (rect.Contains(e.mousePosition))
+                {
+                    if (e.type == EventType.DragUpdated)
+                    {
+                        DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+                        e.Use();
+                    }
+
+                    if (e.type == EventType.DragPerform)
+                    {
+                        DragAndDrop.AcceptDrag();
+
+                        bool added = false;
+                        foreach (UnityEngine.Object draggedObject in DragAndDrop.objectReferences)
+                        {
+                            if (draggedObject is Texture2D texture)
+                            {
+                                textures.Add(texture);
+                                added = true;
+                            }
+                        }
+
+                        if (added)
+                        {
+                            UpdatePreview();
+                            GUIUtility.ExitGUI();
+                        }
+
+                        e.Use();
+                    }
+                }
+            },
+
         };
     }
 
@@ -1544,6 +1648,17 @@ public partial class TextureAtlasEditor // Helpers
         GUILayout.EndHorizontal();
     }
 
+    /// <summary>
+    /// Needs to be called OnGUI because of the way Unity uses a “singleton” like approach to manage the different editor styles.
+    /// <br></br> Otherwise we will get an Null Error everytime we call OnEnable.
+    /// </summary>
+    private void HandleStyles()
+    {
+        CreateFoldoutStyle();
+        CreateLeftMenuStyle();
+        CreateLargeMiniLabel();
+        CreateRightToolbarStyle();
+    }
 }
 
 public partial class TextureAtlasEditor // GUI Styles   
@@ -1579,25 +1694,38 @@ public partial class TextureAtlasEditor // GUI Styles
             OUTLINE_TYPE_ICON = new GUIContent(EditorGUIUtility.IconContent("Grid.PaintTool").image, $"If the outline is to blurry try the Pixel setting.");
     }
 
+    private void CreateLargeMiniLabel()
+    {
+        if (CENTERED_MINI_LABEL_LARGE == null)
+            CENTERED_MINI_LABEL_LARGE = new GUIStyle(EditorStyles.whiteMiniLabel)
+            {
+                fontStyle = FontStyle.Bold,
+                fontSize = 15,
+                alignment = TextAnchor.MiddleCenter,
+            };
+    }
+
     /// <summary>
     /// Minimal foldout style.
     /// </summary>
     private void CreateFoldoutStyle()
     {
-        if(FOLDOUT_STYLE == null)
+        if (FOLDOUT_STYLE == null)
         {
             FOLDOUT_STYLE = new GUIStyle(EditorStyles.foldout);
         }
 
+        var temp = new GUIStyle(EditorStyles.miniLabel);
+
         // Has to set outside constructor.
-        FOLDOUT_STYLE.fontStyle = EditorStyles.miniLabel.fontStyle;
-        FOLDOUT_STYLE.fontSize = EditorStyles.miniLabel.fontSize;
-        FOLDOUT_STYLE.normal.textColor = EditorStyles.miniLabel.normal.textColor;
-        FOLDOUT_STYLE.onNormal.textColor = EditorStyles.miniLabel.onNormal.textColor;
-        FOLDOUT_STYLE.active.textColor = EditorStyles.miniLabel.active.textColor;
-        FOLDOUT_STYLE.onActive.textColor = EditorStyles.miniLabel.onActive.textColor;
-        FOLDOUT_STYLE.focused.textColor = EditorStyles.miniLabel.focused.textColor;
-        FOLDOUT_STYLE.onFocused.textColor = EditorStyles.miniLabel.onFocused.textColor;
+        FOLDOUT_STYLE.fontStyle = temp.fontStyle;
+        FOLDOUT_STYLE.fontSize = temp.fontSize;
+        FOLDOUT_STYLE.normal.textColor = temp.normal.textColor;
+        FOLDOUT_STYLE.onNormal.textColor = temp.onNormal.textColor;
+        FOLDOUT_STYLE.active.textColor = temp.active.textColor;
+        FOLDOUT_STYLE.onActive.textColor = temp.onActive.textColor;
+        FOLDOUT_STYLE.focused.textColor = temp.focused.textColor;
+        FOLDOUT_STYLE.onFocused.textColor = temp.onFocused.textColor;
     }
 
     /// <summary>
@@ -1605,24 +1733,28 @@ public partial class TextureAtlasEditor // GUI Styles
     /// </summary>
     private void CreateLeftMenuStyle()
     {
-        // Adjustments for using helpBox style.
-        RectOffset borders = EditorStyles.helpBox.border;
-        borders.top = 0;
-        borders.left = 0;
-        borders.bottom = 0;
-        // default right.
-
-        RectOffset margins = EditorStyles.helpBox.margin;
-        margins.left = 0;
-        margins.top = 0;
-        margins.bottom = 0;
-        // default right.
-
-        LEFT_HELPBOX_STYLE = new GUIStyle(EditorStyles.helpBox)
+        if (LEFT_HELPBOX_STYLE == null)
         {
-            border = borders,
-            margin = margins,
-        };
+            // Adjustments for using helpBox style.
+            RectOffset borders = EditorStyles.helpBox.border;
+            borders.top = 0;
+            borders.left = 0;
+            borders.bottom = 0;
+            // default right.
+
+            RectOffset margins = EditorStyles.helpBox.margin;
+            margins.left = 0;
+            margins.top = 0;
+            margins.bottom = 0;
+            // default right.
+
+            LEFT_HELPBOX_STYLE = new GUIStyle(EditorStyles.helpBox)
+            {
+                border = borders,
+                margin = margins,
+            };
+        }
+
     }
 
     /// <summary>
@@ -1630,14 +1762,15 @@ public partial class TextureAtlasEditor // GUI Styles
     /// </summary>
     private void CreateRightToolbarStyle()
     {
-        // Create a custom style based on the toolbar style
-        RIGHT_TOOLBAR_STYLE = new GUIStyle(EditorStyles.toolbar)
-        {
-            fixedHeight = 0, // Allows the height to stretch
-            stretchHeight = true,
-            alignment = TextAnchor.MiddleCenter,
-            border = new RectOffset(1, 1, 1, 1)
-        };
+        if (RIGHT_TOOLBAR_STYLE == null)
+            // Create a custom style based on the toolbar style
+            RIGHT_TOOLBAR_STYLE = new GUIStyle(EditorStyles.toolbar)
+            {
+                fixedHeight = 0, // Allows the height to stretch
+                stretchHeight = true,
+                alignment = TextAnchor.MiddleCenter,
+                border = new RectOffset(1, 1, 1, 1)
+            };
     }
 
     /// <summary>
@@ -1727,7 +1860,7 @@ public partial class TextureAtlasEditor // Draw Methods
 
             menu.AddSeparator("");
             menu.AddItem(new GUIContent("Import (Folder)"), false, ImportImagesFromFolder);
-            
+
 
             menu.AddSeparator("");
             menu.AddItem(new GUIContent("Export (Atlas)"), false, SaveAtlas);
@@ -1744,7 +1877,7 @@ public partial class TextureAtlasEditor // Draw Methods
 
         // Right Side ---        
 
-        if (GUILayout.Button(new GUIContent(EditorGUIUtility.IconContent("SceneLoadIn").image, "Import Folder."), EditorStyles.toolbarButton)) // Load textures from folder
+        if (GUILayout.Button(new GUIContent(EditorGUIUtility.IconContent("d_Project").image, "Import Folder."), EditorStyles.toolbarButton)) // Load textures from folder
         {
             ImportImagesFromFolder();
         }
@@ -1754,7 +1887,7 @@ public partial class TextureAtlasEditor // Draw Methods
             SaveAtlas();
         }
 
-        if (GUILayout.Button(EditorGUIUtility.IconContent("pane options"), EditorStyles.toolbarButton)) // Settings.
+        if (GUILayout.Button(EditorGUIUtility.IconContent("d_Settings"), EditorStyles.toolbarButton)) // Settings.
         {
             GenericMenu menu = new GenericMenu();
             menu.AddDisabledItem(new GUIContent("Hotkeys"));
@@ -1784,7 +1917,7 @@ public partial class TextureAtlasEditor // Draw Methods
     /// </summary>
     private void DrawLeftSidebar()
     {
-        GUILayout.BeginVertical(LEFT_HELPBOX_STYLE, GUILayout.Width(32), GUILayout.ExpandHeight(true));
+        GUILayout.BeginVertical(LEFT_HELPBOX_STYLE, GUILayout.Width(32 + 4), GUILayout.ExpandHeight(true));
 
         // TODO: Make this better.
         LeftMenu();
@@ -1840,9 +1973,9 @@ public partial class TextureAtlasEditor // Draw Methods
 
         // Draw zoom icon.
         GUILayout.Label(ZOOM_IN_ICON);
-
         // Thanks again Unity...
         EndVerticalCenter();
+                GUILayout.Space(2);
 
         BeginVerticalCenter();
         // Because vertical sliders don't center due to pivot..
@@ -1865,169 +1998,125 @@ public partial class TextureAtlasEditor // Draw Methods
 
     // Right Side ---
     #region Right Side
-    private void DrawRightSidebar()
+
+    private Vector2 settingsScrollPos;
+
+    private void DrawRightSidebar(Rect area)
     {
         // Start right group
-        GUILayout.BeginVertical(LEFT_HELPBOX_STYLE, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true)); // Start right group
+        GUILayout.BeginVertical(EditorStyles.inspectorFullWidthMargins); // Start right group
 
-        // WIP
-        #region Toolbar WIP
+        // Scroll for all the content but 'Generate' button.
+        settingsScrollPos = GUILayout.BeginScrollView(settingsScrollPos, false, false, GUILayout.Width(area.width), GUILayout.ExpandHeight(true));
 
-        GUILayout.BeginVertical(GUILayout.ExpandHeight(true)); // Start top
+        // Settings area
+        DrawSettingsSection(area);
 
-        GUILayout.Label("TBD Toolbar", EditorStyles.centeredGreyMiniLabel);
-
-        GUILayout.EndVertical();
-
-        // Top
-        GUILayout.BeginVertical(GUILayout.ExpandHeight(true)); // Start top
-
-        #region Toolbar
-
-        // Temp Workspace Toolbar (Disabled WIP)
-        string[] viewIcons = { "d_RectTool On", "d_ScaleTool On", "d_PositionAsUV1 Icon", "d_Image Icon", "d_OrientationGizmo@2x", "d_SceneViewFX@2x" };
-
-        // Create the toolbar layout
-        GUILayout.BeginVertical(GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
-        GUILayout.BeginHorizontal(EditorStyles.inspectorFullWidthMargins);
-
-        BeginVerticalCenter();
-        var btns = new GUIStyle(EditorStyles.iconButton)
-        {
-            fixedHeight = 22,
-            fixedWidth = 22,
-            alignment = TextAnchor.MiddleCenter,
-        };
-        GUI.enabled = false;
-        SelectionRightMenu = GUILayout.SelectionGrid(SelectionRightMenu, CreateSlectionGridMenuButtons(viewIcons), viewIcons.Length, btns);
-        GUI.enabled = true;
-        EndVerticalCenter();
-
-        GUILayout.EndHorizontal();
-        GUILayout.EndVertical();
-
-        #endregion
-
+        GUILayout.EndScrollView();
         EditorGUILayout.Separator();
 
-        #endregion
+        GUILayout.BeginVertical(EditorStyles.inspectorDefaultMargins);
+        if (GUILayout.Button("Generate"))
+        {
+            UpdateAtlas();
+            DebugEditor("Texture atlas generated successfully.");
+        }
+        GUILayout.EndVertical();
 
-        // HelpBox styled vertical area with scroll view
-        GUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+        // End right group
+        GUILayout.EndVertical();
+    }
+
+    private void DrawSettingsSection(Rect area)
+    {
+        // InspectorFullWidthMargins & Helpbox styled vertical area with scroll view
+        GUILayout.BeginVertical(EditorStyles.inspectorFullWidthMargins, GUILayout.ExpandHeight(true));
+
+        GUILayout.BeginVertical(EditorStyles.helpBox);
+
+        #region Label
+        GUILayout.BeginHorizontal(EditorStyles.centeredGreyMiniLabel);
+        GUILayout.Label("Texture(s) Settings.", EditorStyles.centeredGreyMiniLabel);
+        GUILayout.Space(5);
+        GUILayout.EndHorizontal();
+        #endregion
 
         #region Fit & Alignment
 
-        #region Foldout Style
-        // Making sure to avoid Errors.
-        if(FOLDOUT_STYLE == null)
-        {
-            CreateFoldoutStyle();
-        }
-        #endregion
-
         FOLDOUT_TEXTURE_ALIGNMENT = EditorGUILayout.Foldout(FOLDOUT_TEXTURE_ALIGNMENT, "Fit & Alignment", FOLDOUT_STYLE);
 
-        GUILayout.Space(2);
         if (FOLDOUT_TEXTURE_ALIGNMENT)
         {
-            GUILayout.BeginVertical(EditorStyles.helpBox); // using helpBox style for a better look
-
-            GUILayout.Space(2);
-
+            GUILayout.BeginVertical(EditorStyles.helpBox);
             DrawAlignmentSection();
-
             GUILayout.EndVertical();
-
         }
         #endregion
 
         #region Extend & Crop
         FOLDOUT_SCALE_CROP = EditorGUILayout.Foldout(FOLDOUT_SCALE_CROP, "Extend & Crop", FOLDOUT_STYLE);
 
-        GUILayout.Space(2);
         if (FOLDOUT_SCALE_CROP)
         {
-            GUILayout.BeginVertical(EditorStyles.helpBox); // using helpBox style for a better look
-
-            GUILayout.Space(2);
+            GUILayout.BeginVertical(EditorStyles.helpBox);
             DrawPaddingSection();
-
             GUILayout.EndVertical();
         }
-
         #endregion
 
         #region Outline
         FOLDOUT_OUTLINE = EditorGUILayout.Foldout(FOLDOUT_OUTLINE, "Outline", FOLDOUT_STYLE);
-        GUILayout.Space(2);
+
         if (FOLDOUT_OUTLINE)
         {
-            GUILayout.BeginVertical(EditorStyles.helpBox); // using helpBox style for a better look
-
-            GUILayout.Space(2);
+            GUILayout.BeginVertical(EditorStyles.helpBox);
             DrawOutlineSection();
-
             GUILayout.EndVertical();
         }
         #endregion
 
         #region Size
-
         FOLDOUT_SIZE = EditorGUILayout.Foldout(FOLDOUT_SIZE, "Adjust Size", FOLDOUT_STYLE);
-        GUILayout.Space(2);
         if (FOLDOUT_SIZE)
         {
-            GUILayout.BeginVertical(EditorStyles.helpBox); // using helpBox style for a better look
-
-            GUILayout.Space(2);
+            GUILayout.BeginVertical(EditorStyles.helpBox);
             DrawResizeSection();
-            GUILayout.Space(2);
-
             GUILayout.EndVertical();
         }
-
         #endregion
 
         GUILayout.EndVertical();
 
-
-        GUILayout.EndVertical(); // End top
-
-        // Middle
-        GUILayout.BeginVertical(GUILayout.ExpandHeight(true)); // Start middle
+        // Push Texture and Atlas down.
+        GUILayout.FlexibleSpace();
 
         #region Textures to Atlas & Generate
 
-        EditorGUILayout.Separator();
+        GUILayout.BeginVertical(EditorStyles.helpBox);
 
-        // Tile Palette Preview
-        
-        GUILayout.Label("Atlas Items", EditorStyles.centeredGreyMiniLabel);
         GUILayout.Space(5);
 
-        listScrollPos = EditorGUILayout.BeginScrollView(listScrollPos, GUILayout.ExpandHeight(true));
-        textureList.DoLayoutList();
-        EditorGUILayout.EndScrollView();
-
-        GUILayout.Space(8);
-        GUILayout.FlexibleSpace();
-
-        GUILayout.BeginVertical(LEFT_HELPBOX_STYLE, GUILayout.ExpandHeight(true)); // Start inner vertical for generate button
-
-        if (GUILayout.Button("Generate"))
-        {
-            UpdateAtlas();
-            DebugEditor("Texture atlas generated successfully.");
-        }
-
+        #region Label
+        GUILayout.BeginHorizontal(EditorStyles.centeredGreyMiniLabel);
+        //GUILayout.BeginVertical(EditorStyles.inspectorDefaultMargins);
+        GUILayout.Label("Atlas Texture(s)", EditorStyles.centeredGreyMiniLabel);
+        GUILayout.Space(5);
+        //GUILayout.EndVertical();
+        GUILayout.EndHorizontal();
         #endregion
 
-        GUILayout.EndVertical(); // End inner vertical for generate button
+        listScrollPos = GUILayout.BeginScrollView(listScrollPos, EditorStyles.inspectorFullWidthMargins, GUILayout.MinHeight(area.height / 4));
 
-        GUILayout.EndVertical(); // End middle
+        textureList.DoLayoutList();
+        GUILayout.EndScrollView();
 
-        GUILayout.Space(2);
-        GUILayout.EndVertical(); // End right group
+        // Handle deselection.
+        HandleDeselection(GUILayoutUtility.GetLastRect());
+
+        GUILayout.EndVertical();
+        #endregion
+
+        GUILayout.EndVertical();
     }
 
     #region Right Section Specifics
@@ -2037,13 +2126,19 @@ public partial class TextureAtlasEditor // Draw Methods
     /// </summary>
     private void DrawResizeSection()
     {
+        var style = new GUIStyle(EditorStyles.label)
+        {
+            alignment = TextAnchor.MiddleRight,
+        };
+
+        GUILayout.BeginVertical(style, GUILayout.ExpandWidth(true)); // Start horizontal for padding
+
         // Create a horizontal group for the resize slider
         GUILayout.BeginHorizontal();
 
         // Display the resize slider
         IconButtonWithSlider("ScaleTool On", "Resize(%):", ref resizePercentage, 1, 100, $"Resizes The Final Exported Asset by ({resizePercentage}%).\nOriginal Assets/Atlas are preserved.");
 
-        GUILayout.Space(2);
         if (GUILayout.Button("Apply"))
         {
             UpdatePreview();
@@ -2051,7 +2146,12 @@ public partial class TextureAtlasEditor // Draw Methods
 
         GUILayout.EndHorizontal();
         if (SHOW_HELP)
+        {
+            GUILayout.Space(2);
             EditorGUILayout.HelpBox($"The new estimated size will be: {(calculatedWidth / 100) * resizePercentage}x{(calculatedHeight / 100) * resizePercentage}.", MessageType.None);
+        }
+
+        GUILayout.EndVertical();
     }
 
     /// <summary>
@@ -2059,11 +2159,16 @@ public partial class TextureAtlasEditor // Draw Methods
     /// </summary>
     private void DrawPaddingSection()
     {
+        var style = new GUIStyle(EditorStyles.label)
+        {
+            alignment = TextAnchor.MiddleRight,
+        };
+
         #region padding
         maxPadding = CalculateMaxPadding();
         maxCropping = CalculateMaxCropping();
 
-        GUILayout.BeginVertical(GUILayout.ExpandWidth(true)); // Start horizontal for padding
+        GUILayout.BeginVertical(style, GUILayout.ExpandWidth(true)); // Start horizontal for padding
 
         EditorGUI.BeginChangeCheck();
 
@@ -2084,7 +2189,10 @@ public partial class TextureAtlasEditor // Draw Methods
         }
 
         if (SHOW_HELP && textureList.count > 0)
+        {
+            GUILayout.Space(2);
             EditorGUILayout.HelpBox($"The Maximum EXTEND is: {maxPadding} & the Maximum CROPPING is: {maxCropping} to not exceed the maximum or minimum allowed size for this atlas.", MessageType.None);
+        }
 
 
         GUILayout.EndVertical();
@@ -2097,6 +2205,13 @@ public partial class TextureAtlasEditor // Draw Methods
     /// </summary>
     private void DrawOutlineSection()
     {
+        var style = new GUIStyle(EditorStyles.label)
+        {
+            alignment = TextAnchor.MiddleRight,
+        };
+
+        GUILayout.BeginVertical(style, GUILayout.ExpandWidth(true)); // Start horizontal for padding
+
         // Start Gaussian or Pixel
         GUILayout.BeginHorizontal();
 
@@ -2126,6 +2241,7 @@ public partial class TextureAtlasEditor // Draw Methods
 
         if (SHOW_HELP && outlineThickness != 0)
         {
+            GUILayout.Space(2);
             EditorGUILayout.HelpBox("When having Outline enabled the preview will take significant time to update.", MessageType.Warning);
         }
 
@@ -2137,6 +2253,9 @@ public partial class TextureAtlasEditor // Draw Methods
         {
             UpdatePreview();
         }
+
+        GUILayout.EndVertical();
+
     }
 
     /// <summary>
@@ -2203,7 +2322,10 @@ public partial class TextureAtlasEditor // Draw Methods
                 }
 
                 if (SHOW_HELP)
+                {
+                    GUILayout.Space(2);
                     EditorGUILayout.HelpBox($"The minimum COLUMNS to not exceed the maximum allowed size for this atlas is ({minColumns}).", MessageType.None);
+                }
 
                 break;
 
@@ -2231,7 +2353,10 @@ public partial class TextureAtlasEditor // Draw Methods
                 }
 
                 if (SHOW_HELP)
+                {
+                    GUILayout.Space(2);
                     EditorGUILayout.HelpBox($"The minimum ROWS to not exceed the maximum allowed size for this atlas is ({minRows}).", MessageType.None);
+                }
 
                 break;
 
@@ -2256,12 +2381,12 @@ public partial class TextureAtlasEditor // Draw Methods
     /// <summary>
     /// Creates the centeral Preview container.
     /// </summary>
-    private void DrawPreviewArea()
+    private void DrawPreviewArea(Rect Area)
     {
-        GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(PREVIEW_AREA_WIDTH));
+        GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(PREVIEW_AREA_WIDTH), GUILayout.ExpandHeight(true));
 
         // Preview Area
-        Preview();
+        Preview(Area);
 
         // End Middle Area
         GUILayout.EndVertical();
@@ -2270,10 +2395,10 @@ public partial class TextureAtlasEditor // Draw Methods
     /// <summary>
     /// Preview Logic.
     /// </summary>
-    private void Preview()
+    private void Preview(Rect Area)
     {
         // Begin Preview Container.
-        GUILayout.BeginVertical(GUI.skin.box, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
+        GUILayout.BeginVertical(GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
 
         // Preview Container Rect.
         Rect viewRect = GUILayoutUtility.GetRect(PREVIEW_AREA_WIDTH, position.height - BOTTOM_BAR_HEIGHT);
@@ -2291,9 +2416,9 @@ public partial class TextureAtlasEditor // Draw Methods
         // Draw the checkerboard background.
         if (checkerboardTexture != null)
         {
-            for (int y = 0; y < zoomedHeight; y += checkerboardTexture.height)
+            for (int y = 0; y < Area.height + zoomedHeight; y += checkerboardTexture.height)
             {
-                for (int x = 0; x < zoomedWidth; x += checkerboardTexture.width)
+                for (int x = 0; x < Area.width + zoomedWidth; x += checkerboardTexture.width)
                 {
                     GUI.DrawTexture(new Rect(x, y, checkerboardTexture.width, checkerboardTexture.height), checkerboardTexture);
                 }
@@ -2318,6 +2443,9 @@ public partial class TextureAtlasEditor // Draw Methods
 
         // End Preview Container.
         GUILayout.EndVertical();
+
+        //Drag and drop iamges the preview field.
+        HandleDragAndDrop(viewRect);
     }
     #endregion
 
@@ -2382,9 +2510,9 @@ public partial class TextureAtlasEditor // Debug
     /// <param name="message"></param>
     private void DebugEditor(string message) => LAST_DEBUG_MESSAGE = message;
 
-   /// <summary>
-   /// Temporary Dummy Method.
-   /// </summary>
+    /// <summary>
+    /// Temporary Dummy Method.
+    /// </summary>
     private void TBDOptions() => DebugEditor("TBD");
 }
 
