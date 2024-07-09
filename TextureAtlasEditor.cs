@@ -623,6 +623,43 @@ public partial class TextureAtlasEditor // Menu Methods
         DebugEditor("Texture saved to: " + path);
     }
 
+    // Drag and Drop ---
+    /// <summary>
+    /// Logic for Drag and Drop (Asset or Explorer).
+    /// </summary>
+    private bool HandleDroppedAssets()
+    {
+        // we need to whole loop.
+        bool added = false;
+
+        DragAndDrop.AcceptDrag();
+
+        foreach (UnityEngine.Object draggedObject in DragAndDrop.objectReferences)
+        {
+            if (draggedObject is Texture2D texture)
+            {
+                textures.Add(texture);
+                added = true;
+            }
+        }
+
+        // Handle dragging from the Windows Explorer
+        foreach (string path in DragAndDrop.paths)
+        {
+            if (path.EndsWith(".png") || path.EndsWith(".jpg") || path.EndsWith(".jpeg") || path.EndsWith(".tga"))
+            {
+                byte[] fileData = File.ReadAllBytes(path);
+                // Create a new texture
+                Texture2D externalTexture = new Texture2D(2, 2);
+                externalTexture.LoadImage(fileData); // Load the texture from bytes
+                textures.Add(externalTexture);
+                added = true;
+            }
+        }
+
+        return added;
+    }
+
     // Import ---
 
     /// <summary>
@@ -1073,18 +1110,12 @@ public partial class TextureAtlasEditor // Events
 
                 if (evt.type == EventType.DragPerform)
                 {
-                    DragAndDrop.AcceptDrag();
-
-                    foreach (UnityEngine.Object draggedObject in DragAndDrop.objectReferences)
+                    if (HandleDroppedAssets())
                     {
-                        if (draggedObject is Texture2D texture)
-                        {
-                            textures.Add(texture);
-                        }
+                        UpdatePreview();
                     }
-
-                    UpdatePreview();
                 }
+
                 Event.current.Use();
                 break;
         }
@@ -1357,19 +1388,7 @@ public partial class TextureAtlasEditor // Helpers
 
                     if (e.type == EventType.DragPerform)
                     {
-                        DragAndDrop.AcceptDrag();
-
-                        bool added = false;
-                        foreach (UnityEngine.Object draggedObject in DragAndDrop.objectReferences)
-                        {
-                            if (draggedObject is Texture2D texture)
-                            {
-                                textures.Add(texture);
-                                added = true;
-                            }
-                        }
-
-                        if (added)
+                        if (HandleDroppedAssets())
                         {
                             UpdatePreview();
                             GUIUtility.ExitGUI();
@@ -1701,7 +1720,7 @@ public partial class TextureAtlasEditor // GUI Styles
             {
                 fontStyle = FontStyle.Bold,
                 fontSize = 15,
-                alignment = TextAnchor.MiddleCenter,
+                alignment = TextAnchor.MiddleCenter,/**/
             };
     }
 
