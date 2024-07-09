@@ -3,7 +3,7 @@
 - The `Texture Atlas Creator` was designed to help you doing simple tasks directly from the `Unity Editor` it simplify the process (and saves time) of creating texture `Atlases` or `collections` with extra tools.
 - *`The Editor` was just intended to collect and stack `2DTextures` into a `Atlas` with ease, Then it became something else and I do plan on updating it but for now it is what it is!*.
 
-![EditorPreview](https://github.com/SirHolmstrom/Unity-Texture-Atlas-Creator/assets/71155336/c8ba10ec-e2cd-4f77-b724-2acf1e3a7ad8)
+![EmptyEditorWindow](https://github.com/SirHolmstrom/Unity-Texture-Atlas-Creator/assets/71155336/541bb91f-b3bb-473e-a631-f9df23d2ea4a)
 
 *Expect some bugs when it's coming to edge cases and I'm open to adding more features upon request.*
 
