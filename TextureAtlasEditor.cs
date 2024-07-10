@@ -15,6 +15,9 @@ using UnityEditorInternal;
 using System.Collections.Generic;
 using System.IO;
 using Unity.VisualScripting;
+using PlasticGui.WebApi.Responses;
+using UnityEditor.Toolbars;
+using Codice.CM.Common.Tree.Partial;
 
 public partial class TextureAtlasEditor /*Editor*/      : EditorWindow
 {
@@ -65,7 +68,7 @@ public partial class TextureAtlasEditor /*Editor*/      : EditorWindow
         GUILayout.EndArea();
 
         // Right side: Configuration area.
-        Rect rightSidebarArea = new Rect(position.width - ONE_THIRD_SIZE, EditorStyles.toolbar.fixedHeight, ONE_THIRD_SIZE, position.height - BOTTOM_BAR_HEIGHT); 
+        Rect rightSidebarArea = new Rect(position.width - ONE_THIRD_SIZE, EditorStyles.toolbar.fixedHeight, ONE_THIRD_SIZE, position.height - BOTTOM_BAR_HEIGHT);
 
         GUILayout.BeginArea(rightSidebarArea);
 
@@ -94,6 +97,7 @@ public partial class TextureAtlasEditor /*Editor*/      : EditorWindow
 public partial class TextureAtlasEditor // Fields       
 {
     #region Editor Fields
+
     // Lists ---
     private List<Texture2D> textures = new List<Texture2D>();
     private ReorderableList textureList;
@@ -103,17 +107,19 @@ public partial class TextureAtlasEditor // Fields
 
     // Zoom ---
     private float zoomScale = 0.5f;
-    private const float zoomMin = 0.01f;
+    private const float zoomMin = 0.1f;
     private const float zoomMax = 1f;
 
     // Debug ---
+    private List<Rect> textureRects = new List<Rect>();
     private int calculatedWidth = 0;
     private int calculatedHeight = 0;
     protected string LAST_DEBUG_MESSAGE = "";
 
     // Atlas Textures ---
-    private Texture2D atlas;
-    private Texture2D resizedAtlas;
+    private Texture2D atlas; // original.
+    private Texture2D resizedAtlas; // downsized.
+    private Texture2D gridTexture; // grid.
 
     // Preview Section
     private Vector2 previewScrollPos;
@@ -170,9 +176,10 @@ public partial class TextureAtlasEditor // Fields
     private GUIStyle FOLDOUT_STYLE;
     private GUIStyle LEFT_HELPBOX_STYLE;
     private GUIStyle GENERIC_BUTTON_STYLE;
+    private GUIStyle GENERIC_BUTTON_STYLE_SMALL;
+
     private GUIStyle RIGHT_TOOLBAR_STYLE;
     private GUIStyle CENTERED_MINI_LABEL_LARGE;
-
 
     // Button State Textures ---
     private Texture2D checkerboardTexture;
@@ -195,20 +202,25 @@ public partial class TextureAtlasEditor // Fields
     private GUIContent PADDING_ICON = null;
     private GUIContent CROP_ICON = null;
 
+    private GUIContent GIZMO_ICON = null;
+    private GUIContent CHECKERS_ICON = null;
+
+
     // Editor/Foldout States ---
     private bool FOLDOUT_SCALE_CROP = true;
     private bool FOLDOUT_TEXTURE_ALIGNMENT = true;
     private bool FOLDOUT_OUTLINE = false;
     private bool FOLDOUT_SIZE = false;
+    private bool FOLDOUT_GIZMO = false;
+
     private bool SHOW_HELP = false;
+    private bool SHOW_GIZMOS = false;
+    private bool SHOW_CHECKER = true;
 
     // Dialogue States (WIP) ---
     private bool showResizeDialog = false;
-    private bool showNewDialog = false;
-    private bool showResetDialog = false;
     private bool showSaveDialog = false;
     private bool showResetConfirmationDialog = false;
-    private bool showSaveAsDialog = false;
 
     // Constants ---
     private const int SIDE_BAR_WIDTH = 32;
@@ -219,6 +231,10 @@ public partial class TextureAtlasEditor // Fields
     // Constant Properties
     private float ONE_THIRD_SIZE => (position.width / 3);
     private float PREVIEW_AREA_WIDTH => (ONE_THIRD_SIZE * 2) - SIDE_BAR_WIDTH;
+
+    // Static
+    private static readonly string normalizedDataPath = Application.dataPath.Replace("\\", "/");
+
     #endregion
 }
 
@@ -277,13 +293,16 @@ public partial class TextureAtlasEditor // Atlas
         calculatedHeight = Mathf.Min(calculatedHeight, MAX_SIZE_TEXTURE);
     }
 
+    //(TODO IMPLEMENTS THE NEW PROCESSING BUT NEEDS SOME ADJUSTMENTS FIRST)
+
     /// <summary>
     /// Generate the Final Atlas/Preview.
     /// </summary>
-    private void UpdateAtlas()
+    private void UpdateAtlas(bool drawOutline = false)
     {
-        if (textures == null /*|| textures.Count == 0*/)
+        if (textures == null || textures.Count == 0)
         {
+            gridTexture = null;
             resizedAtlas = null;
             atlas = null;
             DebugEditor("No textures selected!");
@@ -298,9 +317,16 @@ public partial class TextureAtlasEditor // Atlas
             return;
         }
 
+        // Create the atlas texture
         atlas = new Texture2D(calculatedWidth, calculatedHeight, TextureFormat.RGBA32, false);
         atlas.filterMode = FilterMode.Point;
         atlas.wrapMode = TextureWrapMode.Clamp;
+
+        // Create the grid texture
+        gridTexture = new Texture2D(calculatedWidth, calculatedHeight, TextureFormat.RGBA32, false);
+        gridTexture.filterMode = FilterMode.Point;
+        gridTexture.wrapMode = TextureWrapMode.Clamp;
+
 
         // Initialize the atlas with fully transparent pixels
         Color[] transparentPixels = new Color[calculatedWidth * calculatedHeight];
@@ -308,7 +334,17 @@ public partial class TextureAtlasEditor // Atlas
         {
             transparentPixels[i] = new Color(0, 0, 0, 0); // Fully transparent color
         }
+
+        // invisible pixels.
         atlas.SetPixels(transparentPixels);
+        gridTexture.SetPixels(transparentPixels);
+
+        // update.
+        atlas.Apply();
+        gridTexture.Apply();
+
+        // collect all rects of the textures.
+        textureRects.Clear();
 
         int currentX = 0;
         int currentY = 0;
@@ -320,7 +356,7 @@ public partial class TextureAtlasEditor // Atlas
             if (texture == null) continue;
 
             Texture2D processedTexture = texture;
-            if (outlineThickness > 0)
+            if (outlineThickness > 0 && drawOutline)
             {
                 processedTexture = ApplyOutline(texture, outlineThickness, outlineColor);
             }
@@ -346,10 +382,12 @@ public partial class TextureAtlasEditor // Atlas
             // Create a new texture with padding or cropping
             Texture2D paddedTexture = new Texture2D(paddedWidth, paddedHeight);
             Color[] clearPixels = new Color[paddedWidth * paddedHeight];
+
             for (int i = 0; i < clearPixels.Length; i++)
             {
                 clearPixels[i] = new Color(0, 0, 0, 0); // Transparent color
             }
+
             paddedTexture.SetPixels(clearPixels);
 
             if (padding >= 0)
@@ -374,30 +412,301 @@ public partial class TextureAtlasEditor // Atlas
             // Set pixels to atlas
             Color[] texturePixels = paddedTexture.GetPixels();
             atlas.SetPixels(currentX, currentY, paddedWidth, paddedHeight, texturePixels);
+
+            textureRects.Add(new Rect(currentX, currentY, paddedWidth, paddedHeight));
+
             currentX += paddedWidth;
             rowHeight = Mathf.Max(rowHeight, paddedHeight);
             columnCounter++;
         }
 
-        if (packingOption == Packing.Tight)
+        if (packingOption == Packing.TightExperimental)
         {
             atlas = TightPacking(textures, calculatedWidth, calculatedHeight);
         }
 
         atlas.Apply();
+
+        // Draw outline for debugging
+        DrawDebugGrid(atlas, textureRects);
+
         DebugEditor("Texture atlas generated successfully.");
 
         // after the atlas is ready let's build the resize preview.
         CheckResize();
-
     }
 
     /// <summary>
-    /// Updates the Preview with all current settings. (TODO CHECK DIRTY)
+    /// Updates the Preview with all current settings.
     /// </summary>
-    private void UpdatePreview()
+    private void UpdatePreview(bool drawOutline = false)
     {
-        UpdateAtlas();
+        UpdateAtlas(drawOutline);
+    }
+
+    // TODO IMPLEMENT TO UPDATE ATLAS (BUT BROKE FOR SOME RESON)
+    #region Processing
+    /// <summary>
+    /// Processes a texture by applying an outline (if needed), padding or cropping, and resizing. Finally, ensures the texture is readable.
+    /// </summary>
+    /// <param name="texture">The original texture to process.</param>
+    /// <returns>A new, processed texture that is readable.</returns>
+    private Texture2D ProcessTexture(Texture2D texture)
+    {
+        // Apply an outline to the texture (if the outline thickness is greater than 0).
+        Texture2D processedTexture = ApplyOutlineIfNeeded(texture);
+
+        // Apply padding and cropping based on the specified padding value. (TODO CHANGE PADDING TO EXTENDING)
+        processedTexture = ApplyPaddingOrCropping(processedTexture);
+
+        // Resize the texture if requested.
+        processedTexture = ResizeIfNeeded(processedTexture);
+
+        // Making sure that the processed texture is readable.
+        return GetReadableTexture(processedTexture);
+    }
+
+    /// <summary>
+    /// Applies an outline to the texture if the specified outline thickness is greater than 0.
+    /// </summary>
+    /// <param name="texture">The texture to potentially apply an outline to.</param>
+    /// <returns>The original texture with an outline applied, or the original texture if no outline is needed.</returns>
+    private Texture2D ApplyOutlineIfNeeded(Texture2D texture)
+    {
+        if (outlineThickness > 0)
+        {
+            // Apply and return the texture with an outline.
+            return ApplyOutline(texture, outlineThickness, outlineColor);
+        }
+
+        // Return the original texture if no outline is applied.
+        return texture;
+    }
+
+    /// <summary>
+    /// Applies padding or cropping to the texture based on the specified padding value.
+    /// </summary>
+    /// <param name="texture">The texture to apply padding or cropping to.</param>
+    /// <returns>A new texture with padding or cropping applied.</returns>
+    private Texture2D ApplyPaddingOrCropping(Texture2D texture)
+    {
+        // Calculate the new texture dimensions after extendng/cropping (padding).
+        int paddedWidth = texture.width + padding * 2;
+        int paddedHeight = texture.height + padding * 2;
+        Texture2D finalTexture = new Texture2D(paddedWidth, paddedHeight);
+
+        // Initialize the new texture with transparent pixels.
+        Color[] clearPixels = new Color[paddedWidth * paddedHeight];
+        for (int j = 0; j < clearPixels.Length; j++)
+        {
+            clearPixels[j] = new Color(0, 0, 0, 0); // Transparent color
+        }
+        finalTexture.SetPixels(clearPixels);
+
+        // Apply extending or cropping based on the padding value.
+        if (padding >= 0)
+        {
+            finalTexture.SetPixels(padding, padding, texture.width, texture.height, texture.GetPixels());
+        }
+        else
+        {
+            // Apply cropping by calculating the crop dimensions and setting the cropped pixels.
+            int cropX = Mathf.Abs(padding);
+            int cropY = Mathf.Abs(padding);
+            int cropWidth = Mathf.Max(texture.width - 2 * cropX, 0);
+            int cropHeight = Mathf.Max(texture.height - 2 * cropY, 0);
+
+            if (cropWidth > 0 && cropHeight > 0)
+            {
+                finalTexture.SetPixels(0, 0, cropWidth, cropHeight, texture.GetPixels(cropX, cropY, cropWidth, cropHeight));
+            }
+        }
+
+        finalTexture.Apply();
+
+        return finalTexture;
+    }
+
+    /// <summary>
+    /// Resizes the texture based on the specified resize percentage, if it is not set to 100% (default).
+    /// </summary>
+    /// <param name="texture">The texture to resize.</param>
+    /// <returns>The resized texture, or the original texture if no resizing is needed.</returns>
+    private Texture2D ResizeIfNeeded(Texture2D texture)
+    {
+        if (resizePercentage != 100)
+        {
+            // Resize and return the texture based on the specified percentage.
+            return GetTexture(texture, resizePercentage);
+        }
+        // Return the original texture.
+        return texture;
+    }
+
+    #endregion
+
+}
+
+public partial class TextureAtlasEditor // Save         
+{
+    // Methods ---
+
+    /// <summary>
+    /// Saves the whole Atlas with modifications.
+    /// </summary>
+    private void SaveAtlas()
+    {
+        if (atlas != null)
+        {
+            string path = EditorUtility.SaveFilePanel("Save Texture Atlas", "", "TextureAtlas.png", "png");
+            if (!string.IsNullOrEmpty(path))
+            {
+                Texture2D textureToSave = resizedAtlas != null ? resizedAtlas : atlas;
+                SaveTextureAsPNG(textureToSave, path, false);
+            }
+        }
+        else
+        {
+            DebugEditor("No texture atlas to save!");
+        }
+    }
+
+    /// <summary>
+    /// Saves every image with modification seperately as a batch.
+    /// </summary>
+    private void SaveTexturesIndividually()
+    {
+        // Check if there are any textures selected for processing.
+        if (textures == null || textures.Count == 0)
+        {
+            DebugEditor("No textures selected!");
+            return;
+        }
+
+        // Select where to save the textures.
+        string folderPath = EditorUtility.SaveFolderPanel("Save Textures Individually", "", "");
+        if (string.IsNullOrEmpty(folderPath))
+        {
+            DebugEditor("No folder selected for saving textures!");
+            return;
+        }
+
+        // Go through each texture in the list.
+        for (int i = 0; i < textures.Count; i++)
+        {
+            Texture2D texture = textures[i];
+            // Skip null textures.
+            if (texture == null) continue;
+
+            // Process the texture (apply outline, padding/cropping, resize, etc.).
+            Texture2D finalTexture = ProcessTexture(texture);
+            // Construct the path where the texture will be saved.
+            string texturePath = Path.Combine(folderPath, $"Texture_{i}.png");
+            // Save the processed texture as a PNG file.
+            SaveTextureAsPNG(finalTexture, texturePath, true);
+
+            // Clean up: Destroy the processed texture if it's a new instance.
+            if (finalTexture != texture)
+            {
+                DestroyImmediate(finalTexture);
+            }
+        }
+
+        // Notify that all textures have been saved.
+        DebugEditor($"All textures saved to: {folderPath}.");
+    }
+
+    /// <summary>
+    /// Encoding to PNG to path.
+    /// </summary>
+    private void SaveTextureAsPNG(Texture2D texture, string path, bool isBulkSave)
+    {
+        // If it's a bulk save operation, ensure we don't overwrite existing files.
+        if (isBulkSave && File.Exists(path))
+        {
+            path = GetIncrementalPath(path);
+        }
+
+        // Encode the texture to PNG format and save it to the specified path.
+        byte[] bytes = texture.EncodeToPNG();
+        File.WriteAllBytes(path, bytes);
+
+        // Notify the user where the texture was saved.
+        DebugEditor($"Texture saved to: {path}");
+
+        // Normalize the path for asset importing.
+        string normalizedPath = NormalizePath(path);
+
+        // If the saved texture is within the Assets folder, apply import settings.
+        if (normalizedPath.StartsWith(normalizedDataPath))
+        {
+            string relativePath = $"Assets{normalizedPath.Substring(normalizedDataPath.Length)}";
+            SetTextureImporterSettings(relativePath);
+
+            // TODO: CREATE A FOLDER INSTAED WHEN DOING BULK?
+        }
+    }
+
+    // Helpers ---
+
+    /// <summary>
+    /// Finds the next available path and names the bulked export to it instead of overriding.
+    /// </summary>
+    /// <param name="path"></param>
+    /// <returns></returns>
+    private string GetIncrementalPath(string path)
+    {
+        string directory = Path.GetDirectoryName(path);
+        string filename = Path.GetFileNameWithoutExtension(path);
+        string extension = Path.GetExtension(path);
+        int counter = 1;
+
+        string newPath = path;
+        while (File.Exists(newPath))
+        {
+            newPath = Path.Combine(directory, $"{filename}_{counter}{extension}");
+            counter++;
+        }
+
+        return NormalizePath(newPath);
+    }
+
+    /// <summary>
+    /// Sets the textures to Sprite and make then read/write in bulk after export.
+    /// </summary>
+    /// <param name="assetPath"></param>
+    private void SetTextureImporterSettings(string assetPath)
+    {
+        // Delay the execution of the importer settings application
+        EditorApplication.delayCall += () =>
+        {
+            // Ensure the asset exists
+            if (!File.Exists(assetPath))
+            {
+                Debug.LogError("Asset does not exist: " + assetPath);
+                return;
+            }
+
+            // Import asset to ensure it's up-to-date
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+
+            // Retrieve the TextureImporter
+            TextureImporter importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+            if (importer == null)
+            {
+                Debug.LogError("Failed to get TextureImporter for path: " + assetPath);
+                return;
+            }
+
+            importer.textureType = TextureImporterType.Sprite;
+            importer.isReadable = true;
+            importer.SaveAndReimport();
+
+            // Save and reimport to apply changes
+            EditorUtility.SetDirty(importer);
+            importer.SaveAndReimport();
+        };
+
     }
 }
 
@@ -406,39 +715,84 @@ public partial class TextureAtlasEditor // Menu Methods
     // Reset ---
 
     /// <summary>
+    /// Resets Atlas Creator.
+    /// </summary>
+    private void PerformResetAtlas()
+    {
+        // Clear the textures list
+        ClearTextureList();
+
+        // clear up textures.
+        DestroyTextures();
+
+        // Reset some values.
+        ResetValues();
+
+        // Clear the preview window
+        Repaint();
+
+        // Notify.
+        DebugEditor("Atlas has been reset.");
+    }
+
+    /// <summary>
     /// Saves the whole Atlas with modifications.
     /// </summary>
     private void ResetAtlas()
     {
         if (atlas != null)
         {
+            // Making sure to Save prompt.
             showResetConfirmationDialog = true;
         }
         else
         {
+            // Just Reset.
             PerformResetAtlas();
         }
     }
 
-    private void PerformResetAtlas()
+    /// <summary>
+    /// Destroys all atlases and debug grid.
+    /// </summary>
+    private void DestroyTextures()
     {
-        // Clear the textures list
-        textures.Clear();
-        textureList.list = textures;
-
-        // Reset the atlas and resizedAtlas textures
+        // Temp Atlas/Preview.
         if (atlas != null)
         {
             DestroyImmediate(atlas);
             atlas = null;
         }
 
+        // Temp Resized.
         if (resizedAtlas != null)
         {
             DestroyImmediate(resizedAtlas);
             resizedAtlas = null;
         }
 
+        // Grid.
+        if (gridTexture != null)
+        {
+            DestroyImmediate(gridTexture);
+            gridTexture = null;
+        }
+    }
+
+    /// <summary>
+    /// Clears the texture list.
+    /// </summary>
+    private void ClearTextureList()
+    {
+        textures.Clear();
+        textureList.list = textures;
+    }
+
+    /// <summary>
+    /// Resets most standard values.
+    /// </summary>
+    private void ResetValues()
+    {
         // Reset calculated dimensions
         calculatedWidth = 0;
         calculatedHeight = 0;
@@ -454,11 +808,6 @@ public partial class TextureAtlasEditor // Menu Methods
         // Reset other related fields if needed
         padding = 0;
         outlineThickness = 0;
-
-        // Clear the preview window
-        Repaint();
-
-        DebugEditor("Atlas has been reset.");
     }
 
     // Popup Dialogues (WIP) ---
@@ -481,146 +830,16 @@ public partial class TextureAtlasEditor // Menu Methods
         {
             if (EditorUtility.DisplayDialog("Save", "Do you want to save the current Atlas?", "Yes", "No"))
             {
-                showSaveAsDialog = true;
+                SaveAtlas();
             }
             else
             {
                 PerformResetAtlas();
             }
+
+            showResetConfirmationDialog = false;
             showSaveDialog = false;
         }
-
-        if (showSaveAsDialog)
-        {
-            if (EditorUtility.DisplayDialog("Save As", "How do you want to save the Atlas?", "As Atlas", "As Individual"))
-            {
-                SaveAtlas();
-            }
-            else
-            {
-                SaveTexturesIndividually();
-            }
-            PerformResetAtlas();
-            showSaveAsDialog = false;
-        }
-    }
-
-    // Save ---
-
-    /// <summary>
-    /// Saves the whole Atlas with modifications.
-    /// </summary>
-    private void SaveAtlas()
-    {
-        if (atlas != null)
-        {
-            string path = EditorUtility.SaveFilePanel("Save Texture Atlas", "", "TextureAtlas.png", "png");
-            if (!string.IsNullOrEmpty(path))
-            {
-                Texture2D textureToSave = resizedAtlas != null ? resizedAtlas : atlas;
-                SaveTextureAsPNG(textureToSave, path);
-            }
-        }
-        else
-        {
-            DebugEditor("No texture atlas to save!");
-        }
-    }
-
-    /// <summary>
-    /// Saves every image with modification seperately as a batch.
-    /// </summary>
-    private void SaveTexturesIndividually()
-    {
-        if (textures == null || textures.Count == 0)
-        {
-            DebugEditor("No textures selected!");
-            return;
-        }
-
-        string folderPath = EditorUtility.SaveFolderPanel("Save Textures Individually", "", "");
-        if (string.IsNullOrEmpty(folderPath))
-        {
-            DebugEditor("No folder selected for saving textures!");
-            return;
-        }
-
-        for (int i = 0; i < textures.Count; i++)
-        {
-            Texture2D texture = textures[i];
-            if (texture != null)
-            {
-                // Apply outline if thickness > 0
-                Texture2D processedTexture = texture;
-                if (outlineThickness > 0)
-                {
-                    processedTexture = ApplyOutline(texture, outlineThickness, outlineColor);
-                }
-
-                // Apply padding or cropping
-                int paddedWidth = processedTexture.width + padding * 2;
-                int paddedHeight = processedTexture.height + padding * 2;
-                Texture2D finalTexture = new Texture2D(paddedWidth, paddedHeight);
-
-                Color[] clearPixels = new Color[paddedWidth * paddedHeight];
-                for (int j = 0; j < clearPixels.Length; j++)
-                {
-                    clearPixels[j] = new Color(0, 0, 0, 0); // Transparent color
-                }
-                finalTexture.SetPixels(clearPixels);
-
-                if (padding >= 0)
-                {
-                    finalTexture.SetPixels(padding, padding, processedTexture.width, processedTexture.height, processedTexture.GetPixels());
-                }
-                else
-                {
-                    int cropX = Mathf.Abs(padding);
-                    int cropY = Mathf.Abs(padding);
-                    int cropWidth = Mathf.Max(processedTexture.width - 2 * cropX, 0);
-                    int cropHeight = Mathf.Max(processedTexture.height - 2 * cropY, 0);
-
-                    if (cropWidth > 0 && cropHeight > 0)
-                    {
-                        finalTexture.SetPixels(0, 0, cropWidth, cropHeight, processedTexture.GetPixels(cropX, cropY, cropWidth, cropHeight));
-                    }
-                }
-
-                finalTexture.Apply();
-
-                // Resize the texture if necessary
-                Texture2D resizedTexture = GetTexture(finalTexture, resizePercentage);
-
-                // Ensure the texture is in a format that can be encoded
-                Texture2D readableTexture = GetReadableTexture(resizedTexture);
-
-                string texturePath = Path.Combine(folderPath, $"Texture_{i}.png");
-                SaveTextureAsPNG(readableTexture, texturePath);
-
-                // Clean up if we created a new texture
-                if (readableTexture != finalTexture)
-                {
-                    DestroyImmediate(readableTexture);
-                }
-
-                if (processedTexture != texture)
-                {
-                    DestroyImmediate(processedTexture);
-                }
-            }
-        }
-
-        DebugEditor("All textures saved individually.");
-    }
-
-    /// <summary>
-    /// Encoding to PNG to path.
-    /// </summary>
-    private void SaveTextureAsPNG(Texture2D texture, string path)
-    {
-        byte[] bytes = texture.EncodeToPNG();
-        File.WriteAllBytes(path, bytes);
-        DebugEditor("Texture saved to: " + path);
     }
 
     // Drag and Drop ---
@@ -638,24 +857,53 @@ public partial class TextureAtlasEditor // Menu Methods
         {
             if (draggedObject is Texture2D texture)
             {
-                textures.Add(texture);
-                added = true;
+                if (!texture.isReadable)
+                {
+                    // If the texture is not read/write we will create a temporary one in its place.
+                    Texture2D readableTexture = GetReadableTexture(texture);
+
+                    // keep the name.
+                    readableTexture.name = texture.name;
+
+                    // add the temp.
+                    textures.Add(readableTexture);
+
+                    DebugEditor("Created a temporary image because read/write not set.");
+                }
+
+                else
+                {
+                    // was readable.
+                    textures.Add(texture);
+                }
+            }
+
+            added = true;
+
+        }
+
+        if (!added)
+        {
+            // Handle dragging from the Windows Explorer
+            foreach (string path in DragAndDrop.paths)
+            {
+                if (path.EndsWith(".png") || path.EndsWith(".jpg") || path.EndsWith(".jpeg") || path.EndsWith(".tga"))
+                {
+                    byte[] fileData = File.ReadAllBytes(path);
+                    // Create a new texture
+                    Texture2D externalTexture = new Texture2D(2, 2);
+                    externalTexture.LoadImage(fileData); // Load the texture from bytes
+
+                    // get the name and use it.
+                    string fileName = Path.GetFileNameWithoutExtension(path); // Get the file name without extension
+                    externalTexture.name = fileName;
+
+                    textures.Add(externalTexture);
+                    added = true;
+                }
             }
         }
 
-        // Handle dragging from the Windows Explorer
-        foreach (string path in DragAndDrop.paths)
-        {
-            if (path.EndsWith(".png") || path.EndsWith(".jpg") || path.EndsWith(".jpeg") || path.EndsWith(".tga"))
-            {
-                byte[] fileData = File.ReadAllBytes(path);
-                // Create a new texture
-                Texture2D externalTexture = new Texture2D(2, 2);
-                externalTexture.LoadImage(fileData); // Load the texture from bytes
-                textures.Add(externalTexture);
-                added = true;
-            }
-        }
 
         return added;
     }
@@ -663,12 +911,26 @@ public partial class TextureAtlasEditor // Menu Methods
     // Import ---
 
     /// <summary>
+    /// Sets Read/Write for the texture.
+    /// </summary>
+    /// <param name="assetPath"></param>
+    private void SetTextureReadable(string assetPath)
+    {
+        TextureImporter importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+        if (importer != null && !importer.isReadable)
+        {
+            importer.isReadable = true;
+            importer.SaveAndReimport();
+        }
+    }
+
+    /// <summary>
     /// Loads all selected textures from folder.
     /// </summary>
     private void ImportImagesFromFolder()
     {
         string[] filters = new string[] { "Image files", "png,jpg,jpeg", "All files", "*" };
-        string path = EditorUtility.OpenFilePanelWithFilters("Select Images", "", filters);
+        string path = EditorUtility.OpenFilePanelWithFilters("Select One Image To Import Folder", "", filters);
 
         if (!string.IsNullOrEmpty(path))
         {
@@ -705,6 +967,10 @@ public partial class TextureAtlasEditor // Menu Methods
         {
             byte[] fileData = File.ReadAllBytes(imagePath);
             Texture2D texture = new Texture2D(2, 2);
+
+            string fileName = Path.GetFileNameWithoutExtension(imagePath); // Get the file name without extension
+            texture.name = fileName;
+
             texture.LoadImage(fileData);
             textures.Add(texture);
         }
@@ -722,7 +988,7 @@ public partial class TextureAtlasEditor // Menu Methods
 public partial class TextureAtlasEditor // Packing      
 {
     // Fields ---
-    public enum Packing { Tight, Grid }
+    public enum Packing { Grid, TightExperimental }
     public Packing packingOption = Packing.Grid;
 
     // Draw Editor ---
@@ -782,6 +1048,14 @@ public partial class TextureAtlasEditor // Packing
     private Texture2D TightPacking(List<Texture2D> textures, int atlasWidth, int atlasHeight)
     {
         Texture2D atlas = new Texture2D(atlasWidth, atlasHeight);
+        Color[] clearPixels = new Color[atlasWidth * atlasHeight];
+        for (int i = 0; i < clearPixels.Length; i++)
+        {
+            clearPixels[i] = Color.clear; // Sets the pixels to transparent
+        }
+        atlas.SetPixels(clearPixels);
+        atlas.Apply();
+
         bool[,] occupied = new bool[atlasWidth, atlasHeight];
 
         // Sort textures by size (largest to smallest)
@@ -1303,6 +1577,14 @@ public partial class TextureAtlasEditor // Helpers
     // Misc ---
 
     /// <summary>
+    /// Normalizes path for the Texture Importer.
+    /// </summary>
+    private string NormalizePath(string path)
+    {
+        return path.Replace("\\", "/");
+    }
+
+    /// <summary>
     /// Gets the path this script it located in case we want to store something in the future relative to this path.
     /// </summary>
     private void GetEditorPath()
@@ -1332,8 +1614,7 @@ public partial class TextureAtlasEditor // Helpers
             {
                 if (index >= textures.Count) return;
 
-                // Adjust the rect for the ObjectField to not cover the entire height,
-                // allowing the custom selection background to be visible around the edges
+                // Adjust the rect for the ObjectField and allowing selection background to be visible around edges.
                 float fieldHeight = EditorGUIUtility.singleLineHeight;
                 float verticalPadding = (rect.height - fieldHeight) / 2;
                 Rect fieldRect = new Rect(rect.x + 15, rect.y + verticalPadding, rect.width - 45, fieldHeight); // Adjusted x to account for drag handler
@@ -1341,7 +1622,7 @@ public partial class TextureAtlasEditor // Helpers
                 // Draw the ObjectField
                 textures[index] = (Texture2D)EditorGUI.ObjectField(fieldRect, textures[index], typeof(Texture2D), false);
 
-                // Additional remove button
+                // Additional remove button.
                 if (GUI.Button(new Rect(rect.x + rect.width - 25, rect.y + verticalPadding, 23, fieldHeight), new GUIContent(EditorGUIUtility.IconContent("winbtn_win_close_h"))))
                 {
                     textures.RemoveAt(index);
@@ -1591,6 +1872,31 @@ public partial class TextureAtlasEditor // Helpers
     /// <summary>
     /// Drawn Icon & Label and tooltip.
     /// </summary>
+    private bool ToolbarIconButton(GUIContent content, string label, string tooltip)
+    {
+        // Combine the icon and text into a single GUIContent
+        GUIContent buttonContent = new GUIContent(label, content.image, tooltip);
+
+        // Create a GUIStyle that aligns the text to the right of the icon
+        GUIStyle buttonStyle = new GUIStyle(EditorStyles.toolbarButton)
+        {
+            alignment = TextAnchor.MiddleLeft,
+            // Adjust padding and other style properties as needed
+        };
+
+        // Create the button with the combined content and custom style
+        if (GUILayout.Button(buttonContent, buttonStyle))
+        {
+            // Button action goes here
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Drawn Icon & Label and tooltip.
+    /// </summary>
     private void IconButton(GUIContent content, string label, string tooltip)
     {
         var style = new GUIStyle(EditorStyles.label)
@@ -1701,7 +2007,7 @@ public partial class TextureAtlasEditor // GUI Styles
             ZOOM_IN_ICON = new GUIContent(EditorGUIUtility.IconContent("d_ViewToolZoom").image);
 
         if (PADDING_ICON == null)
-            PADDING_ICON = new GUIContent(EditorGUIUtility.IconContent("d_MoveTool@2x").image, $"Extend: Increases the textures size by adding space around the edges, effectively extending the Atlas.");
+            PADDING_ICON = new GUIContent(EditorGUIUtility.IconContent("d_MoveTool@2x").image, $"Extend: Increases the textures size by adding space around the edges.");
 
         if (CROP_ICON == null)
             CROP_ICON = new GUIContent(EditorGUIUtility.IconContent("d_OrientationGizmo@2x").image, $"Crop: Reduce the image to a selected area, removing outer parts.");
@@ -1711,6 +2017,13 @@ public partial class TextureAtlasEditor // GUI Styles
 
         if (OUTLINE_TYPE_ICON == null)
             OUTLINE_TYPE_ICON = new GUIContent(EditorGUIUtility.IconContent("Grid.PaintTool").image, $"If the outline is to blurry try the Pixel setting.");
+
+        if (GIZMO_ICON == null)
+            GIZMO_ICON = new GUIContent(EditorGUIUtility.IconContent("d_GizmosToggle").image, $"Bounds Grid:\n- Draws a border around the individual textures bounds.");
+
+        if (CHECKERS_ICON == null)
+            CHECKERS_ICON = new GUIContent(EditorGUIUtility.IconContent("CheckerFloor").image, $"Checkers Background:\n- Draws a checkers pattern behind the textures.");
+
     }
 
     private void CreateLargeMiniLabel()
@@ -1795,14 +2108,14 @@ public partial class TextureAtlasEditor // GUI Styles
     /// <summary>
     /// Just a generic dynamic button style that is more flat (TEMP).
     /// </summary>
-    private GUIStyle GetGenericButtonStyle(float size = 32)
+    private GUIStyle GetGenericButtonStyle()
     {
         if (GENERIC_BUTTON_STYLE == null)
         {
             GUIStyle customButtonStyle = new GUIStyle(GUI.skin.button)
             {
-                fixedHeight = size,
-                fixedWidth = size,
+                fixedHeight = 32,
+                fixedWidth = 32,
                 fontSize = 12,
                 alignment = TextAnchor.MiddleCenter,
                 border = new RectOffset(2, 2, 1, 1),
@@ -1820,18 +2133,45 @@ public partial class TextureAtlasEditor // GUI Styles
             customButtonStyle.onFocused.textColor = Color.white;
 
             GENERIC_BUTTON_STYLE = customButtonStyle;
+
+            GENERIC_BUTTON_STYLE.fixedHeight = 32;
+            GENERIC_BUTTON_STYLE.fixedWidth = 32;
         }
-
-        if (size != 32 /*default*/ )
-        {
-            GENERIC_BUTTON_STYLE.fixedHeight = size;
-            GENERIC_BUTTON_STYLE.fixedWidth = size;
-
-            return new GUIStyle(GENERIC_BUTTON_STYLE);
-        }
-
 
         return GENERIC_BUTTON_STYLE;
+    }
+
+    private GUIStyle GetGenericButtonStyleSmall()
+    {
+        if (GENERIC_BUTTON_STYLE_SMALL == null)
+        {
+            GUIStyle customButtonStyle = new GUIStyle(GUI.skin.button)
+            {
+                fixedHeight = 22,
+                fixedWidth = 22,
+                fontSize = 12,
+                alignment = TextAnchor.MiddleCenter,
+                border = new RectOffset(2, 2, 1, 1),
+                margin = new RectOffset(2, 2, 0, 0),
+                padding = new RectOffset(2, 2, 0, 0)
+            };
+
+            customButtonStyle.onNormal.background = normalBackground;
+            customButtonStyle.onNormal.textColor = Color.white;
+            customButtonStyle.onHover.background = normalBackground;
+            customButtonStyle.onHover.textColor = Color.white;
+            customButtonStyle.onActive.background = normalBackground;
+            customButtonStyle.onActive.textColor = Color.white;
+            customButtonStyle.onFocused.background = normalBackground;
+            customButtonStyle.onFocused.textColor = Color.white;
+
+            GENERIC_BUTTON_STYLE_SMALL = customButtonStyle;
+
+            GENERIC_BUTTON_STYLE_SMALL.fixedHeight = 24;
+            GENERIC_BUTTON_STYLE_SMALL.fixedWidth = 24;
+        }
+
+        return GENERIC_BUTTON_STYLE_SMALL;
     }
 
     /// <summary>
@@ -1872,7 +2212,9 @@ public partial class TextureAtlasEditor // Draw Methods
         GUILayout.BeginHorizontal(EditorStyles.toolbar);
 
         // Left Side ---
-        if (GUILayout.Button(EditorGUIUtility.IconContent("UnityEditor.ConsoleWindow"), EditorStyles.toolbarButton))
+
+
+        if (ToolbarIconButton(EditorGUIUtility.IconContent("UnityEditor.ConsoleWindow"), "File", "File Menu."))
         {
             GenericMenu menu = new GenericMenu();
             menu.AddItem(new GUIContent("New"), false, ResetAtlas);
@@ -1895,18 +2237,17 @@ public partial class TextureAtlasEditor // Draw Methods
         GUILayout.FlexibleSpace();
 
         // Right Side ---        
-
-        if (GUILayout.Button(new GUIContent(EditorGUIUtility.IconContent("d_Project").image, "Import Folder."), EditorStyles.toolbarButton)) // Load textures from folder
+        if (GUILayout.Button(new GUIContent(EditorGUIUtility.IconContent("d_Project").image, "Import Folder.\n- Select one image to import the folder."), EditorStyles.toolbarButton)) // Load textures from folder
         {
             ImportImagesFromFolder();
         }
 
-        if (GUILayout.Button(new GUIContent(EditorGUIUtility.IconContent("SaveAs").image, "Save Atlas."), EditorStyles.toolbarButton)) // Save.
+        if (GUILayout.Button(new GUIContent(EditorGUIUtility.IconContent("SaveAs").image, "Save Atlas.\n- Saves the textures as an Atlas.\n- Use (file) menu for individual export."), EditorStyles.toolbarButton)) // Save.
         {
             SaveAtlas();
         }
 
-        if (GUILayout.Button(EditorGUIUtility.IconContent("d_Settings"), EditorStyles.toolbarButton)) // Settings.
+        if (GUILayout.Button(new GUIContent (EditorGUIUtility.IconContent("d_Settings").image, "Settings.\n- Toggle Help On and Off.\n- (WIP) Presets settings."), EditorStyles.toolbarButton)) // Settings.
         {
             GenericMenu menu = new GenericMenu();
             menu.AddDisabledItem(new GUIContent("Hotkeys"));
@@ -1961,12 +2302,14 @@ public partial class TextureAtlasEditor // Draw Methods
 
         // TODO: Actually make this useful. (Disabled for now).
         #region Hide TBD Buttons
+
+        SHOW_GIZMOS = GUILayout.Toggle(SHOW_GIZMOS, GIZMO_ICON, GetGenericButtonStyle());
+        SHOW_CHECKER = GUILayout.Toggle(SHOW_CHECKER, CHECKERS_ICON, GetGenericButtonStyle());
+
         GUI.enabled = false;
 
-        if (GUILayout.Toggle(showNewDialog, PLUS_ICON, GetGenericButtonStyle()))
-        {
-            TBDOptions();
-        }
+        SHOW_GIZMOS = GUILayout.Toggle(SHOW_GIZMOS, PLUS_ICON, GetGenericButtonStyle());
+
 
         if (GUILayout.Toggle(showSaveDialog, SAVE_ICON, GetGenericButtonStyle()))
         {
@@ -1994,11 +2337,13 @@ public partial class TextureAtlasEditor // Draw Methods
         GUILayout.Label(ZOOM_IN_ICON);
         // Thanks again Unity...
         EndVerticalCenter();
-                GUILayout.Space(2);
+        GUILayout.Space(2);
 
         BeginVerticalCenter();
         // Because vertical sliders don't center due to pivot..
-        zoomScale = GUILayout.VerticalScrollbar(zoomScale, .1f, zoomMax, zoomMin, GUILayout.Height(150)); // vertical scrollbar for zoom..
+        bool isSmallPreview = resizePercentage <= 15;
+
+        zoomScale = GUILayout.VerticalScrollbar(zoomScale, .1f, isSmallPreview ? zoomMax * 5 : zoomMax, isSmallPreview ? 1 : zoomMin, GUILayout.Height(150)); // vertical scrollbar for zoom..
         EndVerticalCenter();
 
         // Move it from the bottom.
@@ -2126,7 +2471,7 @@ public partial class TextureAtlasEditor // Draw Methods
 
         listScrollPos = GUILayout.BeginScrollView(listScrollPos, EditorStyles.inspectorFullWidthMargins, GUILayout.MinHeight(area.height / 4));
 
-        textureList.DoLayoutList();
+        textureList.DoLayoutList(); // TODO: ADD FIXED BUTTON TO CLEAR SELECTION AND REMOVE '-' button from reordable list.
         GUILayout.EndScrollView();
 
         // Handle deselection.
@@ -2270,7 +2615,7 @@ public partial class TextureAtlasEditor // Draw Methods
         // Apply Outline Button.
         if (GUILayout.Button("Apply Outline"))
         {
-            UpdatePreview();
+            UpdatePreview(true);
         }
 
         GUILayout.EndVertical();
@@ -2433,7 +2778,7 @@ public partial class TextureAtlasEditor // Draw Methods
         previewScrollPos = GUI.BeginScrollView(viewRect, previewScrollPos, previewRect);
 
         // Draw the checkerboard background.
-        if (checkerboardTexture != null)
+        if (checkerboardTexture != null && SHOW_CHECKER)
         {
             for (int y = 0; y < Area.height + zoomedHeight; y += checkerboardTexture.height)
             {
@@ -2455,6 +2800,12 @@ public partial class TextureAtlasEditor // Draw Methods
         else if (atlas != null)
         {
             GUI.DrawTexture(previewRect, atlas, ScaleMode.ScaleToFit);
+        }
+
+        // Draw the grid texture if toggled on
+        if (SHOW_GIZMOS && gridTexture != null)
+        {
+            GUI.DrawTexture(previewRect, gridTexture, ScaleMode.ScaleToFit);
         }
 
         // End Preview Scroll.
@@ -2533,6 +2884,48 @@ public partial class TextureAtlasEditor // Debug
     /// Temporary Dummy Method.
     /// </summary>
     private void TBDOptions() => DebugEditor("TBD");
+
+    private void DrawDebugGrid(Texture2D atlas, List<Rect> textureRects)
+    {
+        Color[] pixels = atlas.GetPixels();
+        int atlasWidth = atlas.width;
+        int atlasHeight = atlas.height;
+
+        foreach (Rect rect in textureRects)
+        {
+            int startX = Mathf.FloorToInt(rect.x);
+            int startY = Mathf.FloorToInt(rect.y);
+            int width = Mathf.FloorToInt(rect.width);
+            int height = Mathf.FloorToInt(rect.height);
+
+            // Top and bottom borders
+            for (int x = startX; x < startX + width; x++)
+            {
+                if (x >= 0 && x < atlasWidth)
+                {
+                    if (startY >= 0 && startY < atlasHeight)
+                        pixels[startY * atlasWidth + x] = Color.black; // Top border
+                    if (startY + height - 1 >= 0 && startY + height - 1 < atlasHeight)
+                        pixels[(startY + height - 1) * atlasWidth + x] = Color.black; // Bottom border
+                }
+            }
+
+            // Left and right borders
+            for (int y = startY; y < startY + height; y++)
+            {
+                if (y >= 0 && y < atlasHeight)
+                {
+                    if (startX >= 0 && startX < atlasWidth)
+                        pixels[y * atlasWidth + startX] = Color.black; // Left border
+                    if (startX + width - 1 >= 0 && startX + width - 1 < atlasWidth)
+                        pixels[y * atlasWidth + (startX + width - 1)] = Color.black; // Right border
+                }
+            }
+        }
+
+        gridTexture.SetPixels(pixels);
+        gridTexture.Apply();
+    }
 }
 
 public partial class TextureAtlasEditor // TODO         
