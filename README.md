@@ -47,7 +47,7 @@
 
 ### Usage
 
-1. Open the Texture Atlas Creator from the Unity menu: `Tools -> Texture Atlas Creator` or `Shift + Alt + A`.
+1. Open the Texture Atlas Creator from the Unity menu: `Tools -> Texture Atlas Creator` or `Alt + Shift + A`.
 2. Add textures to the list by dragging and dropping them into the designated area or using the `+` button or use the `Top Left -> Import (Folder)` and select one item to import the folder.
 3. Adjust the settings on the right sidebar:
    - **Packing**: Choose between Grid Packing and Tight Packing.
