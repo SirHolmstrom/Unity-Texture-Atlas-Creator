@@ -5,6 +5,7 @@
 
 ![image](https://github.com/SirHolmstrom/Unity-Texture-Atlas-Creator/assets/71155336/d414bb6f-78fb-4130-b7dc-a65981dc9227)
 
+*I might make a more complex version with more structure, but I want this to be all in one file.*
 *Expect some bugs when it's coming to edge cases and I'm open to adding more features upon request.*
 
 ## Features
